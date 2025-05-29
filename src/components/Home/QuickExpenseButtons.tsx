@@ -1,7 +1,6 @@
-
-import React from 'react';
-import { Plus } from 'lucide-react';
-import { useApp } from '@/contexts/AppContext';
+import React, { useState } from 'react';
+import { Plus, Loader2 } from 'lucide-react';
+import { useApp } from '@/contexts/FirebaseAppContext';
 import { Button } from '@/components/ui/button';
 
 interface QuickExpenseButtonsProps {
@@ -10,16 +9,22 @@ interface QuickExpenseButtonsProps {
 
 const QuickExpenseButtons: React.FC<QuickExpenseButtonsProps> = ({ onCustomExpense }) => {
   const { addExpense, currentGroup } = useApp();
+  const [addingAmount, setAddingAmount] = useState<number | null>(null);
 
   const quickAmounts = [5, 10, 20, 30, 50, 100];
 
-  const handleQuickExpense = (amount: number) => {
+  const handleQuickExpense = async (amount: number) => {
     if (!currentGroup) {
       onCustomExpense();
       return;
     }
     
-    addExpense(amount, `Spesa veloce €${amount}`);
+    setAddingAmount(amount);
+    try {
+      await addExpense(amount, `Spesa veloce €${amount}`);
+    } finally {
+      setAddingAmount(null);
+    }
   };
 
   return (
@@ -34,9 +39,13 @@ const QuickExpenseButtons: React.FC<QuickExpenseButtonsProps> = ({ onCustomExpen
             key={amount}
             onClick={() => handleQuickExpense(amount)}
             className="h-16 text-lg font-bold bg-white border-2 border-gray-200 text-gray-700 hover:border-banking-blue hover:text-banking-blue hover:bg-blue-50 rounded-xl transition-all duration-200 transform hover:scale-105"
-            disabled={!currentGroup}
+            disabled={!currentGroup || addingAmount !== null}
           >
-            €{amount}
+            {addingAmount === amount ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              `€${amount}`
+            )}
           </Button>
         ))}
       </div>
