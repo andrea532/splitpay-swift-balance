@@ -1,6 +1,6 @@
 import React from 'react';
 import { Clock, CreditCard, Users, ArrowUpRight, ArrowDownRight, CheckCircle } from 'lucide-react';
-import { useApp } from '@/contexts/AppContext';
+import { useApp } from '@/contexts/FirebaseAppContext';
 import { formatDistanceToNow } from 'date-fns';
 import { it } from 'date-fns/locale';
 import { Button } from '@/components/ui/button';
