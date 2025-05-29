@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, Share2, Copy, ArrowRight, RefreshCw } from 'lucide-react';
-import { useApp } from '@/contexts/AppContext';
+import { Users, Plus, Share2, Copy, ArrowRight, Loader2 } from 'lucide-react';
+import { useApp } from '@/contexts/FirebaseAppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -9,73 +9,40 @@ import { formatDistanceToNow } from 'date-fns';
 import { it } from 'date-fns/locale';
 
 const GroupSection: React.FC = () => {
-  const { currentGroup, createGroup, joinGroup, calculateBalances, getSettlements, currentUser, syncCurrentGroup, updateCurrentGroup } = useApp();
+  const { currentGroup, createGroup, joinGroup, calculateBalances, getSettlements, currentUser } = useApp();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isJoinOpen, setIsJoinOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupCode, setGroupCode] = useState('');
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSync, setLastSync] = useState<Date>(new Date());
+  const [isCreating, setIsCreating] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
 
-  // Sync group data
-  const handleSync = () => {
-    setIsSyncing(true);
-    syncCurrentGroup();
-    
-    setTimeout(() => {
-      setIsSyncing(false);
-      setLastSync(new Date());
-      toast({
-        title: "Sincronizzato! 🔄",
-        description: "Dati del gruppo aggiornati",
-      });
-    }, 500);
-  };
-
-  // Auto-sync every 3 seconds when group section is visible
-  useEffect(() => {
-    if (currentGroup) {
-      let previousMemberCount = currentGroup.members.length;
-      
-      const interval = setInterval(() => {
-        syncCurrentGroup();
-        setLastSync(new Date());
-        
-        // Check if new members joined
-        const sharedDb = JSON.parse(localStorage.getItem('splitpay_shared_db') || '{}');
-        if (sharedDb.groups && sharedDb.groups[currentGroup.code]) {
-          const latestGroup = sharedDb.groups[currentGroup.code];
-          if (latestGroup.members.length > previousMemberCount) {
-            const newMembers = latestGroup.members.slice(previousMemberCount);
-            toast({
-              title: "Nuovo membro! 🎉",
-              description: `${newMembers.map(m => m.name).join(', ')} si ${newMembers.length === 1 ? 'è unito' : 'sono uniti'} al gruppo`,
-            });
-            previousMemberCount = latestGroup.members.length;
-          }
-        }
-      }, 3000);
-
-      return () => clearInterval(interval);
-    }
-  }, [currentGroup, syncCurrentGroup]);
-
-  const handleCreateGroup = (e: React.FormEvent) => {
+  const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (groupName.trim()) {
-      createGroup(groupName.trim());
-      setGroupName('');
-      setIsCreateOpen(false);
+      setIsCreating(true);
+      try {
+        await createGroup(groupName.trim());
+        setGroupName('');
+        setIsCreateOpen(false);
+      } finally {
+        setIsCreating(false);
+      }
     }
   };
 
-  const handleJoinGroup = (e: React.FormEvent) => {
+  const handleJoinGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (groupCode.trim()) {
-      const success = joinGroup(groupCode.trim().toUpperCase());
-      if (success) {
-        setGroupCode('');
-        setIsJoinOpen(false);
+      setIsJoining(true);
+      try {
+        const success = await joinGroup(groupCode.trim().toUpperCase());
+        if (success) {
+          setGroupCode('');
+          setIsJoinOpen(false);
+        }
+      } finally {
+        setIsJoining(false);
       }
     }
   };
@@ -136,8 +103,19 @@ const GroupSection: React.FC = () => {
                     className="h-12"
                     required
                   />
-                  <Button type="submit" className="w-full button-banking">
-                    Crea gruppo
+                  <Button 
+                    type="submit" 
+                    className="w-full button-banking"
+                    disabled={isCreating}
+                  >
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                        Creando...
+                      </>
+                    ) : (
+                      'Crea gruppo'
+                    )}
                   </Button>
                 </form>
               </DialogContent>
@@ -163,8 +141,19 @@ const GroupSection: React.FC = () => {
                     maxLength={6}
                     required
                   />
-                  <Button type="submit" className="w-full button-banking">
-                    Unisciti al gruppo
+                  <Button 
+                    type="submit" 
+                    className="w-full button-banking"
+                    disabled={isJoining}
+                  >
+                    {isJoining ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                        Unendosi...
+                      </>
+                    ) : (
+                      'Unisciti al gruppo'
+                    )}
                   </Button>
                 </form>
               </DialogContent>
@@ -193,17 +182,6 @@ const GroupSection: React.FC = () => {
           </div>
           
           <div className="flex space-x-2">
-            <Button
-              onClick={handleSync}
-              variant="outline"
-              size="sm"
-              className="flex items-center space-x-1"
-              disabled={isSyncing}
-            >
-              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Sync...' : 'Sync'}</span>
-            </Button>
-            
             <Button
               onClick={shareGroup}
               variant="outline"
@@ -258,13 +236,6 @@ const GroupSection: React.FC = () => {
               <span className="text-xs text-gray-600 mt-1">altri</span>
             </div>
           )}
-        </div>
-
-        {/* Last sync info */}
-        <div className="mt-4 pt-4 border-t border-gray-200">
-          <p className="text-xs text-gray-500 text-center">
-            Ultimo aggiornamento: {formatDistanceToNow(lastSync, { addSuffix: true, locale: it })}
-          </p>
         </div>
       </div>
 
