@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { Plus, Euro, Users, Clock, Share2, X } from 'lucide-react';
+import { Plus, Euro, Users, Clock, Share2, X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-import { useApp } from '@/contexts/AppContext';
+import { useApp } from '@/contexts/FirebaseAppContext';
 import { toast } from '@/hooks/use-toast';
 
 const FloatingActionButton: React.FC = () => {
@@ -12,21 +12,27 @@ const FloatingActionButton: React.FC = () => {
   const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
   const { addExpense, currentGroup } = useApp();
 
   const toggleMenu = () => {
     setIsOpen(!isOpen);
   };
 
-  const handleAddExpense = (e: React.FormEvent) => {
+  const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     const numAmount = parseFloat(amount);
     if (numAmount > 0) {
-      addExpense(numAmount, description || `Spesa €${numAmount}`);
-      setAmount('');
-      setDescription('');
-      setIsExpenseModalOpen(false);
-      setIsOpen(false);
+      setIsAdding(true);
+      try {
+        await addExpense(numAmount, description || `Spesa €${numAmount}`);
+        setAmount('');
+        setDescription('');
+        setIsExpenseModalOpen(false);
+        setIsOpen(false);
+      } finally {
+        setIsAdding(false);
+      }
     }
   };
 
@@ -211,9 +217,16 @@ const FloatingActionButton: React.FC = () => {
               <Button 
                 type="submit" 
                 className="flex-1 button-banking"
-                disabled={!amount || parseFloat(amount) <= 0}
+                disabled={!amount || parseFloat(amount) <= 0 || isAdding}
               >
-                Aggiungi spesa
+                {isAdding ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Aggiungendo...
+                  </>
+                ) : (
+                  'Aggiungi spesa'
+                )}
               </Button>
             </div>
           </form>
