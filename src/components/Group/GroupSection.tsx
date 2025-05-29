@@ -1,47 +1,17 @@
 import React, { useState } from 'react';
-import { Users, Plus, Share2, Copy, Trash2, Euro } from 'lucide-react';
+import { Users, Plus, Share2, Copy, ArrowRight } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from '@/hooks/use-toast';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Textarea } from '@/components/ui/textarea';
 
 const GroupSection: React.FC = () => {
-  const { 
-    currentGroup, 
-    currentUser,
-    createGroup, 
-    joinGroup, 
-    addMemberToGroup,
-    removeMemberFromGroup,
-    calculateBalances,
-    getGroupExpenses,
-    addExpense,
-    settleDebt
-  } = useApp();
-  
+  const { currentGroup, createGroup, joinGroup, calculateBalances, getSettlements, currentUser } = useApp();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isJoinOpen, setIsJoinOpen] = useState(false);
-  const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
-  const [isAddExpenseOpen, setIsAddExpenseOpen] = useState(false);
-  const [isSettleOpen, setIsSettleOpen] = useState(false);
-  
   const [groupName, setGroupName] = useState('');
   const [groupCode, setGroupCode] = useState('');
-  const [memberName, setMemberName] = useState('');
-  
-  // Expense form state
-  const [expenseAmount, setExpenseAmount] = useState('');
-  const [expenseDescription, setExpenseDescription] = useState('');
-  const [expensePaidBy, setExpensePaidBy] = useState('');
-  const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
-  
-  // Settle debt state
-  const [settleToUserId, setSettleToUserId] = useState('');
-  const [settleAmount, setSettleAmount] = useState('');
 
   const handleCreateGroup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,39 +33,6 @@ const GroupSection: React.FC = () => {
     }
   };
 
-  const handleAddMember = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (memberName.trim()) {
-      addMemberToGroup(memberName.trim());
-      setMemberName('');
-      setIsAddMemberOpen(false);
-    }
-  };
-
-  const handleAddExpense = (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseFloat(expenseAmount);
-    if (amount > 0 && expensePaidBy && selectedParticipants.length > 0) {
-      addExpense(amount, expenseDescription || `Spesa €${amount}`, expensePaidBy, selectedParticipants);
-      setExpenseAmount('');
-      setExpenseDescription('');
-      setExpensePaidBy('');
-      setSelectedParticipants([]);
-      setIsAddExpenseOpen(false);
-    }
-  };
-
-  const handleSettle = (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseFloat(settleAmount);
-    if (amount > 0 && settleToUserId && currentUser) {
-      settleDebt(currentUser.id, settleToUserId, amount);
-      setSettleAmount('');
-      setSettleToUserId('');
-      setIsSettleOpen(false);
-    }
-  };
-
   const copyGroupCode = () => {
     if (currentGroup) {
       navigator.clipboard.writeText(currentGroup.code);
@@ -106,16 +43,19 @@ const GroupSection: React.FC = () => {
     }
   };
 
-  const toggleParticipant = (userId: string) => {
-    setSelectedParticipants(prev => 
-      prev.includes(userId) 
-        ? prev.filter(id => id !== userId)
-        : [...prev, userId]
-    );
+  const shareGroup = () => {
+    if (currentGroup && navigator.share) {
+      navigator.share({
+        title: 'Unisciti al mio gruppo SplitPay',
+        text: `Unisciti al gruppo "${currentGroup.name}" su SplitPay con il codice: ${currentGroup.code}`,
+      }).catch(() => {
+        // Fallback to copy
+        copyGroupCode();
+      });
+    } else {
+      copyGroupCode();
+    }
   };
-
-  const balances = calculateBalances();
-  const groupExpenses = getGroupExpenses();
 
   if (!currentGroup) {
     return (
@@ -188,6 +128,9 @@ const GroupSection: React.FC = () => {
     );
   }
 
+  const balances = calculateBalances();
+  const settlements = getSettlements();
+
   return (
     <div className="px-4 mb-6 space-y-4">
       {/* Group Info Card */}
@@ -202,31 +145,85 @@ const GroupSection: React.FC = () => {
             </p>
           </div>
           
-          <Button
-            onClick={copyGroupCode}
-            variant="outline"
-            size="sm"
-            className="flex items-center space-x-1"
-          >
-            <Copy className="w-4 h-4" />
-            <span className="font-mono">{currentGroup.code}</span>
-          </Button>
+          <div className="flex space-x-2">
+            <Button
+              onClick={shareGroup}
+              variant="outline"
+              size="sm"
+              className="flex items-center space-x-1"
+            >
+              <Share2 className="w-4 h-4" />
+              <span>Condividi</span>
+            </Button>
+            
+            <Button
+              onClick={copyGroupCode}
+              variant="outline"
+              size="sm"
+              className="flex items-center space-x-1"
+            >
+              <Copy className="w-4 h-4" />
+              <span className="font-mono">{currentGroup.code}</span>
+            </Button>
+          </div>
         </div>
 
-        {/* Members List */}
-        <div className="space-y-3 mb-4">
-          {currentGroup.members.map((member) => {
+        <div className="flex items-center space-x-3">
+          {currentGroup.members.slice(0, 4).map((member, index) => (
+            <div 
+              key={member.id}
+              className="flex flex-col items-center animate-fade-in"
+              style={{ animationDelay: `${index * 0.1}s` }}
+            >
+              {member.avatar ? (
+                <img 
+                  src={member.avatar} 
+                  alt={member.name}
+                  className="w-12 h-12 rounded-full border-2 border-white shadow-lg"
+                />
+              ) : (
+                <div className="w-12 h-12 bg-banking-blue text-white rounded-full flex items-center justify-center font-bold border-2 border-white shadow-lg">
+                  {member.name.charAt(0).toUpperCase()}
+                </div>
+              )}
+              <span className="text-xs text-gray-600 mt-1 font-medium">
+                {member.name.split(' ')[0]}
+              </span>
+            </div>
+          ))}
+          
+          {currentGroup.members.length > 4 && (
+            <div className="flex flex-col items-center">
+              <div className="w-12 h-12 bg-gray-200 text-gray-600 rounded-full flex items-center justify-center font-bold border-2 border-white shadow-lg">
+                +{currentGroup.members.length - 4}
+              </div>
+              <span className="text-xs text-gray-600 mt-1">altri</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Members Balances */}
+      <div className="bg-white rounded-2xl p-6 border border-gray-200">
+        <h4 className="text-lg font-semibold text-gray-900 mb-4">Saldi dei membri</h4>
+        <div className="space-y-3">
+          {currentGroup.members.map(member => {
             const balance = balances[member.id] || 0;
-            const isCurrentUser = member.id === currentUser?.id;
+            const isCurrentUser = currentUser?.id === member.id;
             
             return (
-              <div key={member.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+              <div 
+                key={member.id} 
+                className={`flex items-center justify-between p-3 rounded-xl ${
+                  isCurrentUser ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'
+                }`}
+              >
                 <div className="flex items-center space-x-3">
                   {member.avatar ? (
                     <img 
                       src={member.avatar} 
                       alt={member.name}
-                      className="w-10 h-10 rounded-full border-2 border-white shadow"
+                      className="w-10 h-10 rounded-full"
                     />
                   ) : (
                     <div className="w-10 h-10 bg-banking-blue text-white rounded-full flex items-center justify-center font-bold">
@@ -237,234 +234,83 @@ const GroupSection: React.FC = () => {
                     <p className="font-medium text-gray-900">
                       {member.name} {isCurrentUser && '(Tu)'}
                     </p>
-                    <p className={`text-sm font-medium ${
-                      balance > 0 ? 'text-banking-green' : 
-                      balance < 0 ? 'text-banking-red' : 
-                      'text-gray-500'
-                    }`}>
-                      {balance > 0 ? '+' : ''}€{balance.toFixed(2)}
+                    <p className="text-xs text-gray-500">
+                      {balance > 0.01 ? 'Deve ricevere' : balance < -0.01 ? 'Deve dare' : 'In pari'}
                     </p>
                   </div>
                 </div>
                 
-                {!isCurrentUser && currentUser && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeMemberFromGroup(member.id)}
-                    className="text-red-500 hover:text-red-700"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                )}
+                <span className={`text-lg font-bold ${
+                  balance > 0.01 ? 'text-banking-green' : 
+                  balance < -0.01 ? 'text-banking-red' : 
+                  'text-gray-500'
+                }`}>
+                  €{Math.abs(balance).toFixed(2)}
+                </span>
               </div>
             );
           })}
         </div>
-
-        {/* Action Buttons */}
-        <div className="grid grid-cols-2 gap-3">
-          <Dialog open={isAddMemberOpen} onOpenChange={setIsAddMemberOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" className="h-10">
-                <Plus className="w-4 h-4 mr-2" />
-                Aggiungi membro
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="bg-white">
-              <DialogHeader>
-                <DialogTitle>Aggiungi nuovo membro</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleAddMember} className="space-y-4">
-                <Input
-                  placeholder="Nome del membro"
-                  value={memberName}
-                  onChange={(e) => setMemberName(e.target.value)}
-                  className="h-12"
-                  required
-                />
-                <Button type="submit" className="w-full button-banking">
-                  Aggiungi al gruppo
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-
-          <Dialog open={isAddExpenseOpen} onOpenChange={setIsAddExpenseOpen}>
-            <DialogTrigger asChild>
-              <Button className="button-banking h-10">
-                <Euro className="w-4 h-4 mr-2" />
-                Nuova spesa
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="bg-white max-w-md">
-              <DialogHeader>
-                <DialogTitle>Aggiungi spesa di gruppo</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleAddExpense} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Importo
-                  </label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={expenseAmount}
-                    onChange={(e) => setExpenseAmount(e.target.value)}
-                    className="h-12 text-lg"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Descrizione
-                  </label>
-                  <Textarea
-                    placeholder="Di cosa si tratta?"
-                    value={expenseDescription}
-                    onChange={(e) => setExpenseDescription(e.target.value)}
-                    className="resize-none"
-                    rows={2}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Pagato da
-                  </label>
-                  <Select value={expensePaidBy} onValueChange={setExpensePaidBy} required>
-                    <SelectTrigger className="h-12">
-                      <SelectValue placeholder="Seleziona chi ha pagato" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {currentGroup.members.map(member => (
-                        <SelectItem key={member.id} value={member.id}>
-                          {member.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Dividi tra
-                  </label>
-                  <div className="space-y-2 max-h-32 overflow-y-auto">
-                    {currentGroup.members.map(member => (
-                      <label key={member.id} className="flex items-center space-x-2 cursor-pointer">
-                        <Checkbox
-                          checked={selectedParticipants.includes(member.id)}
-                          onCheckedChange={() => toggleParticipant(member.id)}
-                        />
-                        <span className="text-sm">{member.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <Button 
-                  type="submit" 
-                  className="w-full button-banking h-12"
-                  disabled={selectedParticipants.length === 0}
-                >
-                  Aggiungi spesa
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
       </div>
 
-      {/* Recent Expenses */}
-      {groupExpenses.length > 0 && (
+      {/* Settlements */}
+      {settlements.length > 0 && (
         <div className="bg-white rounded-2xl p-6 border border-gray-200">
-          <h4 className="text-lg font-semibold text-gray-900 mb-4">
-            Spese del gruppo
-          </h4>
-          <div className="space-y-3 max-h-64 overflow-y-auto">
-            {groupExpenses.slice(-5).reverse().map(expense => {
-              const payer = currentGroup.members.find(m => m.id === expense.paidBy);
-              const sharePerPerson = expense.amount / expense.participants.length;
-              
-              return (
-                <div key={expense.id} className="p-3 bg-gray-50 rounded-xl">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="font-medium text-gray-900">{expense.description}</p>
-                      <p className="text-sm text-gray-600">
-                        Pagato da {payer?.name} • €{sharePerPerson.toFixed(2)} a testa
-                      </p>
-                    </div>
-                    <p className="font-bold text-lg">€{expense.amount.toFixed(2)}</p>
+          <h4 className="text-lg font-semibold text-gray-900 mb-4">Come saldare i conti</h4>
+          <div className="space-y-3">
+            {settlements.map((settlement, index) => (
+              <div 
+                key={index}
+                className="flex items-center justify-between p-3 bg-yellow-50 rounded-xl border border-yellow-200"
+              >
+                <div className="flex items-center space-x-3">
+                  <div className="flex items-center">
+                    {settlement.from.avatar ? (
+                      <img 
+                        src={settlement.from.avatar} 
+                        alt={settlement.from.name}
+                        className="w-8 h-8 rounded-full"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 bg-gray-400 text-white rounded-full flex items-center justify-center text-sm font-bold">
+                        {settlement.from.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <ArrowRight className="w-4 h-4 text-gray-400" />
+                  
+                  <div className="flex items-center">
+                    {settlement.to.avatar ? (
+                      <img 
+                        src={settlement.to.avatar} 
+                        alt={settlement.to.name}
+                        className="w-8 h-8 rounded-full"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 bg-banking-green text-white rounded-full flex items-center justify-center text-sm font-bold">
+                        {settlement.to.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="ml-2">
+                    <p className="text-sm font-medium text-gray-900">
+                      {settlement.from.name} → {settlement.to.name}
+                    </p>
                   </div>
                 </div>
-              );
-            })}
+                
+                <span className="text-lg font-bold text-banking-blue">
+                  €{settlement.amount.toFixed(2)}
+                </span>
+              </div>
+            ))}
           </div>
-        </div>
-      )}
-
-      {/* Settle Debts */}
-      {currentUser && balances[currentUser.id] < 0 && (
-        <div className="bg-white rounded-2xl p-6 border border-gray-200">
-          <h4 className="text-lg font-semibold text-gray-900 mb-4">
-            Salda i tuoi debiti
-          </h4>
-          <Dialog open={isSettleOpen} onOpenChange={setIsSettleOpen}>
-            <DialogTrigger asChild>
-              <Button className="w-full button-banking">
-                Salda debito
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="bg-white">
-              <DialogHeader>
-                <DialogTitle>Salda debito</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSettle} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Paga a
-                  </label>
-                  <Select value={settleToUserId} onValueChange={setSettleToUserId} required>
-                    <SelectTrigger className="h-12">
-                      <SelectValue placeholder="Seleziona destinatario" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {currentGroup.members
-                        .filter(m => m.id !== currentUser.id && balances[m.id] > 0)
-                        .map(member => (
-                          <SelectItem key={member.id} value={member.id}>
-                            {member.name} (+€{balances[member.id].toFixed(2)})
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Importo
-                  </label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={settleAmount}
-                    onChange={(e) => setSettleAmount(e.target.value)}
-                    className="h-12 text-lg"
-                    required
-                  />
-                </div>
-
-                <Button type="submit" className="w-full button-banking h-12">
-                  Conferma pagamento
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+          
+          <p className="text-xs text-gray-500 mt-4 text-center">
+            💡 Questi pagamenti saldano tutti i debiti del gruppo
+          </p>
         </div>
       )}
     </div>
