@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Users, Plus, Share2, Copy, ArrowRight } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Users, Plus, Share2, Copy, ArrowRight, RefreshCw } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +12,43 @@ const GroupSection: React.FC = () => {
   const [isJoinOpen, setIsJoinOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupCode, setGroupCode] = useState('');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<Date>(new Date());
+
+  // Sync group data
+  const syncGroupData = () => {
+    if (!currentGroup) return;
+    
+    setIsSyncing(true);
+    
+    // Simulate syncing by re-joining the group to get latest data
+    setTimeout(() => {
+      joinGroup(currentGroup.code);
+      setLastSync(new Date());
+      setIsSyncing(false);
+      toast({
+        title: "Sincronizzato! 🔄",
+        description: "Dati del gruppo aggiornati",
+      });
+    }, 500);
+  };
+
+  // Auto-sync every 5 seconds when group section is visible
+  useEffect(() => {
+    if (currentGroup) {
+      const interval = setInterval(() => {
+        const sharedDb = JSON.parse(localStorage.getItem('splitpay_shared_db') || '{}');
+        if (sharedDb.groups && sharedDb.groups[currentGroup.code]) {
+          const latestGroup = sharedDb.groups[currentGroup.code];
+          if (latestGroup.members.length !== currentGroup.members.length) {
+            syncGroupData();
+          }
+        }
+      }, 5000);
+
+      return () => clearInterval(interval);
+    }
+  }, [currentGroup]);
 
   const handleCreateGroup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -146,6 +183,17 @@ const GroupSection: React.FC = () => {
           </div>
           
           <div className="flex space-x-2">
+            <Button
+              onClick={syncGroupData}
+              variant="outline"
+              size="sm"
+              className="flex items-center space-x-1"
+              disabled={isSyncing}
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'Sincronizzando...' : 'Sincronizza'}</span>
+            </Button>
+            
             <Button
               onClick={shareGroup}
               variant="outline"
