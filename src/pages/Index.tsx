@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useApp } from '@/contexts/AppContext';
 import { AppProvider } from '@/contexts/AppContext';
@@ -44,7 +45,7 @@ const MainApp: React.FC = () => {
   const handlePayment = (toUserId: string, amount: number) => {
     // In a real app, this would handle the actual payment
     // For now, we'll just create a payment transaction
-    const expense: Expense = {
+    const expense: any = {
       id: `expense_${Date.now()}`,
       groupId: currentGroup!.id,
       amount: amount,
