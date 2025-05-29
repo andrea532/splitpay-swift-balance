@@ -5,9 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { toast } from '@/hooks/use-toast';
+import { formatDistanceToNow } from 'date-fns';
+import { it } from 'date-fns/locale';
 
 const GroupSection: React.FC = () => {
-  const { currentGroup, createGroup, joinGroup, calculateBalances, getSettlements, currentUser } = useApp();
+  const { currentGroup, createGroup, joinGroup, calculateBalances, getSettlements, currentUser, syncCurrentGroup, updateCurrentGroup } = useApp();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isJoinOpen, setIsJoinOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
@@ -16,16 +18,13 @@ const GroupSection: React.FC = () => {
   const [lastSync, setLastSync] = useState<Date>(new Date());
 
   // Sync group data
-  const syncGroupData = () => {
-    if (!currentGroup) return;
-    
+  const handleSync = () => {
     setIsSyncing(true);
+    syncCurrentGroup();
     
-    // Simulate syncing by re-joining the group to get latest data
     setTimeout(() => {
-      joinGroup(currentGroup.code);
-      setLastSync(new Date());
       setIsSyncing(false);
+      setLastSync(new Date());
       toast({
         title: "Sincronizzato! 🔄",
         description: "Dati del gruppo aggiornati",
@@ -33,22 +32,33 @@ const GroupSection: React.FC = () => {
     }, 500);
   };
 
-  // Auto-sync every 5 seconds when group section is visible
+  // Auto-sync every 3 seconds when group section is visible
   useEffect(() => {
     if (currentGroup) {
+      let previousMemberCount = currentGroup.members.length;
+      
       const interval = setInterval(() => {
+        syncCurrentGroup();
+        setLastSync(new Date());
+        
+        // Check if new members joined
         const sharedDb = JSON.parse(localStorage.getItem('splitpay_shared_db') || '{}');
         if (sharedDb.groups && sharedDb.groups[currentGroup.code]) {
           const latestGroup = sharedDb.groups[currentGroup.code];
-          if (latestGroup.members.length !== currentGroup.members.length) {
-            syncGroupData();
+          if (latestGroup.members.length > previousMemberCount) {
+            const newMembers = latestGroup.members.slice(previousMemberCount);
+            toast({
+              title: "Nuovo membro! 🎉",
+              description: `${newMembers.map(m => m.name).join(', ')} si ${newMembers.length === 1 ? 'è unito' : 'sono uniti'} al gruppo`,
+            });
+            previousMemberCount = latestGroup.members.length;
           }
         }
-      }, 5000);
+      }, 3000);
 
       return () => clearInterval(interval);
     }
-  }, [currentGroup]);
+  }, [currentGroup, syncCurrentGroup]);
 
   const handleCreateGroup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -184,14 +194,14 @@ const GroupSection: React.FC = () => {
           
           <div className="flex space-x-2">
             <Button
-              onClick={syncGroupData}
+              onClick={handleSync}
               variant="outline"
               size="sm"
               className="flex items-center space-x-1"
               disabled={isSyncing}
             >
               <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Sincronizzando...' : 'Sincronizza'}</span>
+              <span>{isSyncing ? 'Sync...' : 'Sync'}</span>
             </Button>
             
             <Button
@@ -248,6 +258,13 @@ const GroupSection: React.FC = () => {
               <span className="text-xs text-gray-600 mt-1">altri</span>
             </div>
           )}
+        </div>
+
+        {/* Last sync info */}
+        <div className="mt-4 pt-4 border-t border-gray-200">
+          <p className="text-xs text-gray-500 text-center">
+            Ultimo aggiornamento: {formatDistanceToNow(lastSync, { addSuffix: true, locale: it })}
+          </p>
         </div>
       </div>
 
