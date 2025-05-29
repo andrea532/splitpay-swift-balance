@@ -1,6 +1,6 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, Minus, AlertCircle } from 'lucide-react';
-import { useApp } from '@/contexts/AppContext';
+import { useApp } from '@/contexts/FirebaseAppContext';
 
 const BalanceCard: React.FC = () => {
   const { currentUser, currentGroup, calculateBalances, getSettlements } = useApp();
