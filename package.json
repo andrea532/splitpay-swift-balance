@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { useApp } from '@/contexts/AppContext';
-import { AppProvider } from '@/contexts/AppContext';
+import { useApp } from '@/contexts/FirebaseAppContext';
+import { FirebaseAppProvider } from '@/contexts/FirebaseAppContext';
 import { formatDistanceToNow } from 'date-fns';
 import { it } from 'date-fns/locale';
-import { Receipt, Users, CreditCard, CheckCircle, Clock, Filter } from 'lucide-react';
+import { Receipt, Users, CreditCard, CheckCircle, Clock, Filter, Loader2 } from 'lucide-react';
 
 // Components
 import LoginScreen from '@/components/Auth/LoginScreen';
@@ -23,21 +23,27 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 const MainApp: React.FC = () => {
-  const { currentUser, currentGroup, addExpense, expenses, transactions, payExpense, getSettlements } = useApp();
+  const { currentUser, currentGroup, addExpense, expenses, transactions, payExpense, getSettlements, isLoading } = useApp();
   const [activeTab, setActiveTab] = useState<'home' | 'group' | 'history'>('home');
   const [isCustomExpenseOpen, setIsCustomExpenseOpen] = useState(false);
   const [customAmount, setCustomAmount] = useState('');
   const [customDescription, setCustomDescription] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'expenses' | 'payments'>('all');
+  const [isAddingExpense, setIsAddingExpense] = useState(false);
 
-  const handleCustomExpense = (e: React.FormEvent) => {
+  const handleCustomExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     const numAmount = parseFloat(customAmount);
     if (numAmount > 0) {
-      addExpense(numAmount, customDescription || `Spesa €${numAmount}`);
-      setCustomAmount('');
-      setCustomDescription('');
-      setIsCustomExpenseOpen(false);
+      setIsAddingExpense(true);
+      try {
+        await addExpense(numAmount, customDescription || `Spesa €${numAmount}`);
+        setCustomAmount('');
+        setCustomDescription('');
+        setIsCustomExpenseOpen(false);
+      } finally {
+        setIsAddingExpense(false);
+      }
     }
   };
 
@@ -60,6 +66,17 @@ const MainApp: React.FC = () => {
 
   if (!currentUser) {
     return <LoginScreen />;
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-banking-blue mx-auto mb-4" />
+          <p className="text-gray-600">Caricamento...</p>
+        </div>
+      </div>
+    );
   }
 
   const renderContent = () => {
@@ -296,8 +313,19 @@ const MainApp: React.FC = () => {
               />
             </div>
 
-            <Button type="submit" className="w-full button-banking h-12">
-              Aggiungi spesa
+            <Button 
+              type="submit" 
+              className="w-full button-banking h-12"
+              disabled={isAddingExpense}
+            >
+              {isAddingExpense ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Aggiungendo...
+                </>
+              ) : (
+                'Aggiungi spesa'
+              )}
             </Button>
           </form>
         </DialogContent>
@@ -308,9 +336,9 @@ const MainApp: React.FC = () => {
 
 const Index: React.FC = () => {
   return (
-    <AppProvider>
+    <FirebaseAppProvider>
       <MainApp />
-    </AppProvider>
+    </FirebaseAppProvider>
   );
 };
 
