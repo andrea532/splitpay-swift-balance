@@ -16,9 +16,14 @@ interface AppContextType {
   payExpense: (expenseId: string) => void;
   calculateBalances: () => { [userId: string]: number };
   getSettlements: () => { from: User; to: User; amount: number }[];
+  syncCurrentGroup: () => void;
+  updateCurrentGroup: (group: Group) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+// Shared database key
+const SHARED_DB_KEY = 'splitpay_shared_db';
 
 export const useApp = () => {
   const context = useContext(AppContext);
@@ -36,20 +41,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [groups, setGroups] = useState<{ [code: string]: Group }>({});
 
   // Simulate a shared database using localStorage
-  const SHARED_DB_KEY = 'splitpay_shared_db';
-
   const getSharedDatabase = () => {
     const dbString = localStorage.getItem(SHARED_DB_KEY);
     if (dbString) {
-      return JSON.parse(dbString);
+      try {
+        return JSON.parse(dbString);
+      } catch {
+        return { groups: {}, expenses: [], transactions: [] };
+      }
     }
-    return { groups: {}, expenses: [] };
+    return { groups: {}, expenses: [], transactions: [] };
   };
 
   const updateSharedDatabase = (updates: any) => {
     const db = getSharedDatabase();
     const updatedDb = { ...db, ...updates };
     localStorage.setItem(SHARED_DB_KEY, JSON.stringify(updatedDb));
+    
+    // Trigger storage event for other tabs/windows
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: SHARED_DB_KEY,
+      newValue: JSON.stringify(updatedDb),
+      url: window.location.href
+    }));
+    
     return updatedDb;
   };
 
@@ -57,8 +72,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     const savedUser = localStorage.getItem('splitpay_user');
     const savedGroup = localStorage.getItem('splitpay_group');
-    const savedExpenses = localStorage.getItem('splitpay_expenses');
-    const savedTransactions = localStorage.getItem('splitpay_transactions');
 
     if (savedUser) {
       setCurrentUser(JSON.parse(savedUser));
@@ -67,6 +80,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Load from shared database
     const sharedDb = getSharedDatabase();
     setGroups(sharedDb.groups || {});
+    setExpenses(sharedDb.expenses || []);
+    setTransactions(sharedDb.transactions || []);
     
     if (savedGroup) {
       const group = JSON.parse(savedGroup);
@@ -79,32 +94,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentGroup(group);
       }
     }
-    
-    if (savedExpenses) {
-      setExpenses(JSON.parse(savedExpenses));
-    }
-    if (savedTransactions) {
-      setTransactions(JSON.parse(savedTransactions));
-    }
   }, []);
 
-  // Sync with shared database periodically
+  // Listen for storage changes from other tabs/windows
   useEffect(() => {
-    const syncInterval = setInterval(() => {
-      if (currentGroup) {
-        const sharedDb = getSharedDatabase();
-        if (sharedDb.groups[currentGroup.code]) {
-          const latestGroup = sharedDb.groups[currentGroup.code];
-          if (JSON.stringify(latestGroup) !== JSON.stringify(currentGroup)) {
-            setCurrentGroup(latestGroup);
-            localStorage.setItem('splitpay_group', JSON.stringify(latestGroup));
-          }
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === SHARED_DB_KEY && e.newValue) {
+        const sharedDb = JSON.parse(e.newValue);
+        setGroups(sharedDb.groups || {});
+        setExpenses(sharedDb.expenses || []);
+        setTransactions(sharedDb.transactions || []);
+        
+        // Update current group if it exists in the shared db
+        if (currentGroup && sharedDb.groups[currentGroup.code]) {
+          const updatedGroup = sharedDb.groups[currentGroup.code];
+          setCurrentGroup(updatedGroup);
+          localStorage.setItem('splitpay_group', JSON.stringify(updatedGroup));
         }
       }
-    }, 2000); // Sync every 2 seconds
+    };
 
-    return () => clearInterval(syncInterval);
-  }, [currentGroup]);
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [currentGroup?.code]);
 
   // Save data to localStorage when state changes
   useEffect(() => {
@@ -120,20 +132,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentGroup]);
 
   useEffect(() => {
-    localStorage.setItem('splitpay_expenses', JSON.stringify(expenses));
+    const sharedDb = getSharedDatabase();
+    updateSharedDatabase({ 
+      groups, 
+      expenses: sharedDb.expenses || [],
+      transactions: sharedDb.transactions || []
+    });
+  }, [groups]);
+
+  useEffect(() => {
+    const sharedDb = getSharedDatabase();
+    updateSharedDatabase({ 
+      groups: sharedDb.groups || {}, 
+      expenses,
+      transactions: sharedDb.transactions || []
+    });
   }, [expenses]);
 
   useEffect(() => {
-    localStorage.setItem('splitpay_transactions', JSON.stringify(transactions));
+    const sharedDb = getSharedDatabase();
+    updateSharedDatabase({ 
+      groups: sharedDb.groups || {}, 
+      expenses: sharedDb.expenses || [],
+      transactions
+    });
   }, [transactions]);
-
-  useEffect(() => {
-    updateSharedDatabase({ groups });
-  }, [groups]);
 
   const login = (name: string) => {
     const user: User = {
-      id: `user_${Date.now()}`,
+      id: `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       name,
       balance: 0,
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`
@@ -149,12 +176,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logout = () => {
     setCurrentUser(null);
     setCurrentGroup(null);
-    setExpenses([]);
-    setTransactions([]);
     localStorage.removeItem('splitpay_user');
     localStorage.removeItem('splitpay_group');
-    localStorage.removeItem('splitpay_expenses');
-    localStorage.removeItem('splitpay_transactions');
     
     toast({
       title: "Logout effettuato",
@@ -175,7 +198,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentGroup(group);
     const newGroups = { ...groups, [code]: group };
     setGroups(newGroups);
-    updateSharedDatabase({ groups: newGroups });
     
     toast({
       title: `Gruppo "${name}" creato! 🎉`,
@@ -194,8 +216,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const existingGroup = sharedDb.groups[upperCode] || groups[upperCode];
       
       if (existingGroup) {
-        // Check if user is already a member
-        const isAlreadyMember = existingGroup.members.some(m => m.id === currentUser.id);
+        // Check if user is already a member by both ID and name
+        const isAlreadyMember = existingGroup.members.some(
+          m => m.id === currentUser.id || m.name === currentUser.name
+        );
         
         // Add current user to existing group if not already a member
         const updatedMembers = isAlreadyMember 
@@ -207,12 +231,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentGroup(updatedGroup);
         const newGroups = { ...groups, [upperCode]: updatedGroup };
         setGroups(newGroups);
-        updateSharedDatabase({ groups: newGroups });
         
-        toast({
-          title: `Entrato nel gruppo "${existingGroup.name}"! ✅`,
-          description: `${updatedMembers.length} membri nel gruppo`,
-        });
+        if (!isAlreadyMember) {
+          toast({
+            title: `Entrato nel gruppo "${existingGroup.name}"! ✅`,
+            description: `Ora siete in ${updatedMembers.length}`,
+          });
+        } else {
+          toast({
+            title: `Bentornato nel gruppo "${existingGroup.name}"!`,
+            description: `${updatedMembers.length} membri nel gruppo`,
+          });
+        }
         
         return true;
       } else {
@@ -228,7 +258,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentGroup(group);
         const newGroups = { ...groups, [upperCode]: group };
         setGroups(newGroups);
-        updateSharedDatabase({ groups: newGroups });
         
         toast({
           title: `Nuovo gruppo creato! ✅`,
@@ -248,6 +277,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   };
 
+  const syncCurrentGroup = () => {
+    if (!currentGroup) return;
+    
+    const sharedDb = getSharedDatabase();
+    if (sharedDb.groups[currentGroup.code]) {
+      const latestGroup = sharedDb.groups[currentGroup.code];
+      setCurrentGroup(latestGroup);
+      localStorage.setItem('splitpay_group', JSON.stringify(latestGroup));
+    }
+  };
+
+  const updateCurrentGroup = (group: Group) => {
+    setCurrentGroup(group);
+    localStorage.setItem('splitpay_group', JSON.stringify(group));
+  };
+
   const addExpense = (amount: number, description: string) => {
     if (!currentUser || !currentGroup) {
       toast({
@@ -259,7 +304,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const expense: Expense = {
-      id: `expense_${Date.now()}`,
+      id: `expense_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       groupId: currentGroup.id,
       amount,
       description,
@@ -269,10 +314,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdBy: currentUser.id
     };
 
-    setExpenses(prev => [...prev, expense]);
+    const newExpenses = [...expenses, expense];
+    setExpenses(newExpenses);
 
     const transaction: Transaction = {
-      id: `transaction_${Date.now()}`,
+      id: `transaction_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       type: 'expense',
       amount,
       description: `${currentUser.name} ha pagato: ${description}`,
@@ -281,7 +327,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'completed'
     };
 
-    setTransactions(prev => [...prev, transaction]);
+    const newTransactions = [...transactions, transaction];
+    setTransactions(newTransactions);
 
     toast({
       title: `Spesa aggiunta: €${amount.toFixed(2)}`,
@@ -296,7 +343,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!expense) return;
 
     const transaction: Transaction = {
-      id: `transaction_${Date.now()}`,
+      id: `transaction_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       type: 'payment',
       amount: expense.amount / expense.participants.length,
       description: `Pagamento quota per: ${expense.description}`,
@@ -306,7 +353,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'completed'
     };
 
-    setTransactions(prev => [...prev, transaction]);
+    const newTransactions = [...transactions, transaction];
+    setTransactions(newTransactions);
 
     toast({
       title: "Pagamento registrato! 💳",
@@ -332,11 +380,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const sharePerPerson = expense.amount / expense.participants.length;
           
           // Person who paid gets credit
-          balances[expense.paidBy] += expense.amount;
+          if (balances[expense.paidBy] !== undefined) {
+            balances[expense.paidBy] += expense.amount;
+          }
           
           // All participants get debited their share
           expense.participants.forEach(participantId => {
-            balances[participantId] -= sharePerPerson;
+            if (balances[participantId] !== undefined) {
+              balances[participantId] -= sharePerPerson;
+            }
           });
         }
       });
@@ -346,8 +398,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .filter(t => t.type === 'payment' && t.from && t.to)
       .forEach(payment => {
         if (payment.from && payment.to) {
-          balances[payment.from] += payment.amount;
-          balances[payment.to] -= payment.amount;
+          if (balances[payment.from] !== undefined) {
+            balances[payment.from] += payment.amount;
+          }
+          if (balances[payment.to] !== undefined) {
+            balances[payment.to] -= payment.amount;
+          }
         }
       });
 
@@ -417,12 +473,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addExpense,
       payExpense,
       calculateBalances,
-      getSettlements
+      getSettlements,
+      syncCurrentGroup,
+      updateCurrentGroup
     }}>
       {children}
-    </AppContext.Provider>
-  );
-};
     </AppContext.Provider>
   );
 };
