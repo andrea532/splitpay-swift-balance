@@ -35,30 +35,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [groups, setGroups] = useState<{ [code: string]: Group }>({});
 
+  // Simulate a shared database using localStorage
+  const SHARED_DB_KEY = 'splitpay_shared_db';
+
+  const getSharedDatabase = () => {
+    const dbString = localStorage.getItem(SHARED_DB_KEY);
+    if (dbString) {
+      return JSON.parse(dbString);
+    }
+    return { groups: {}, expenses: [] };
+  };
+
+  const updateSharedDatabase = (updates: any) => {
+    const db = getSharedDatabase();
+    const updatedDb = { ...db, ...updates };
+    localStorage.setItem(SHARED_DB_KEY, JSON.stringify(updatedDb));
+    return updatedDb;
+  };
+
   // Load data from localStorage on mount
   useEffect(() => {
     const savedUser = localStorage.getItem('splitpay_user');
     const savedGroup = localStorage.getItem('splitpay_group');
     const savedExpenses = localStorage.getItem('splitpay_expenses');
     const savedTransactions = localStorage.getItem('splitpay_transactions');
-    const savedGroups = localStorage.getItem('splitpay_groups');
 
     if (savedUser) {
       setCurrentUser(JSON.parse(savedUser));
     }
+
+    // Load from shared database
+    const sharedDb = getSharedDatabase();
+    setGroups(sharedDb.groups || {});
+    
     if (savedGroup) {
-      setCurrentGroup(JSON.parse(savedGroup));
+      const group = JSON.parse(savedGroup);
+      // Check if group exists in shared database and update with latest data
+      if (sharedDb.groups[group.code]) {
+        const latestGroup = sharedDb.groups[group.code];
+        setCurrentGroup(latestGroup);
+        localStorage.setItem('splitpay_group', JSON.stringify(latestGroup));
+      } else {
+        setCurrentGroup(group);
+      }
     }
+    
     if (savedExpenses) {
       setExpenses(JSON.parse(savedExpenses));
     }
     if (savedTransactions) {
       setTransactions(JSON.parse(savedTransactions));
     }
-    if (savedGroups) {
-      setGroups(JSON.parse(savedGroups));
-    }
   }, []);
+
+  // Sync with shared database periodically
+  useEffect(() => {
+    const syncInterval = setInterval(() => {
+      if (currentGroup) {
+        const sharedDb = getSharedDatabase();
+        if (sharedDb.groups[currentGroup.code]) {
+          const latestGroup = sharedDb.groups[currentGroup.code];
+          if (JSON.stringify(latestGroup) !== JSON.stringify(currentGroup)) {
+            setCurrentGroup(latestGroup);
+            localStorage.setItem('splitpay_group', JSON.stringify(latestGroup));
+          }
+        }
+      }
+    }, 2000); // Sync every 2 seconds
+
+    return () => clearInterval(syncInterval);
+  }, [currentGroup]);
 
   // Save data to localStorage when state changes
   useEffect(() => {
@@ -82,7 +128,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [transactions]);
 
   useEffect(() => {
-    localStorage.setItem('splitpay_groups', JSON.stringify(groups));
+    updateSharedDatabase({ groups });
   }, [groups]);
 
   const login = (name: string) => {
@@ -127,7 +173,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     
     setCurrentGroup(group);
-    setGroups(prev => ({ ...prev, [code]: group }));
+    const newGroups = { ...groups, [code]: group };
+    setGroups(newGroups);
+    updateSharedDatabase({ groups: newGroups });
     
     toast({
       title: `Gruppo "${name}" creato! 🎉`,
@@ -139,19 +187,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const joinGroup = (code: string): boolean => {
     if (code.length === 6 && currentUser) {
-      // Check if group exists
-      const existingGroup = groups[code.toUpperCase()];
+      const upperCode = code.toUpperCase();
+      
+      // First check shared database for the latest group data
+      const sharedDb = getSharedDatabase();
+      const existingGroup = sharedDb.groups[upperCode] || groups[upperCode];
       
       if (existingGroup) {
+        // Check if user is already a member
+        const isAlreadyMember = existingGroup.members.some(m => m.id === currentUser.id);
+        
         // Add current user to existing group if not already a member
-        const updatedMembers = existingGroup.members.some(m => m.id === currentUser.id) 
+        const updatedMembers = isAlreadyMember 
           ? existingGroup.members 
           : [...existingGroup.members, currentUser];
           
         const updatedGroup = { ...existingGroup, members: updatedMembers };
         
         setCurrentGroup(updatedGroup);
-        setGroups(prev => ({ ...prev, [code.toUpperCase()]: updatedGroup }));
+        const newGroups = { ...groups, [upperCode]: updatedGroup };
+        setGroups(newGroups);
+        updateSharedDatabase({ groups: newGroups });
         
         toast({
           title: `Entrato nel gruppo "${existingGroup.name}"! ✅`,
@@ -164,13 +220,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const group: Group = {
           id: `group_${Date.now()}`,
           name: `Gruppo ${code}`,
-          code: code.toUpperCase(),
+          code: upperCode,
           members: [currentUser],
           createdAt: new Date()
         };
         
         setCurrentGroup(group);
-        setGroups(prev => ({ ...prev, [code.toUpperCase()]: group }));
+        const newGroups = { ...groups, [upperCode]: group };
+        setGroups(newGroups);
+        updateSharedDatabase({ groups: newGroups });
         
         toast({
           title: `Nuovo gruppo creato! ✅`,
@@ -362,6 +420,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       getSettlements
     }}>
       {children}
+    </AppContext.Provider>
+  );
+};
     </AppContext.Provider>
   );
 };
