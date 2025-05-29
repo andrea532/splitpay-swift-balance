@@ -1,6 +1,23 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, Group, Expense, Transaction } from '@/types';
 import { toast } from '@/hooks/use-toast';
+import { db } from '@/lib/firebase';
+import {
+  collection,
+  doc,
+  setDoc,
+  getDoc,
+  onSnapshot,
+  updateDoc,
+  arrayUnion,
+  query,
+  where,
+  getDocs,
+  addDoc,
+  serverTimestamp,
+  orderBy,
+  limit
+} from 'firebase/firestore';
 
 interface AppContextType {
   currentUser: User | null;
@@ -10,20 +27,16 @@ interface AppContextType {
   groups: { [code: string]: Group };
   login: (name: string) => void;
   logout: () => void;
-  createGroup: (name: string) => string;
-  joinGroup: (code: string) => boolean;
-  addExpense: (amount: number, description: string) => void;
-  payExpense: (expenseId: string) => void;
+  createGroup: (name: string) => Promise<string>;
+  joinGroup: (code: string) => Promise<boolean>;
+  addExpense: (amount: number, description: string) => Promise<void>;
+  payExpense: (expenseId: string) => Promise<void>;
   calculateBalances: () => { [userId: string]: number };
   getSettlements: () => { from: User; to: User; amount: number }[];
-  syncCurrentGroup: () => void;
-  updateCurrentGroup: (group: Group) => void;
+  isLoading: boolean;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-
-// Shared database key
-const SHARED_DB_KEY = 'splitpay_shared_db';
 
 export const useApp = () => {
   const context = useContext(AppContext);
@@ -33,130 +46,87 @@ export const useApp = () => {
   return context;
 };
 
-export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const FirebaseAppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentGroup, setCurrentGroup] = useState<Group | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [groups, setGroups] = useState<{ [code: string]: Group }>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [unsubscribers, setUnsubscribers] = useState<(() => void)[]>([]);
 
-  // Simulate a shared database using localStorage
-  const getSharedDatabase = () => {
-    const dbString = localStorage.getItem(SHARED_DB_KEY);
-    if (dbString) {
-      try {
-        return JSON.parse(dbString);
-      } catch {
-        return { groups: {}, expenses: [], transactions: [] };
-      }
-    }
-    return { groups: {}, expenses: [], transactions: [] };
-  };
-
-  const updateSharedDatabase = (updates: any) => {
-    const db = getSharedDatabase();
-    const updatedDb = { ...db, ...updates };
-    localStorage.setItem(SHARED_DB_KEY, JSON.stringify(updatedDb));
-    
-    // Trigger storage event for other tabs/windows
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: SHARED_DB_KEY,
-      newValue: JSON.stringify(updatedDb),
-      url: window.location.href
-    }));
-    
-    return updatedDb;
-  };
-
-  // Load data from localStorage on mount
+  // Load user from localStorage on mount
   useEffect(() => {
     const savedUser = localStorage.getItem('splitpay_user');
-    const savedGroup = localStorage.getItem('splitpay_group');
-
     if (savedUser) {
       setCurrentUser(JSON.parse(savedUser));
     }
-
-    // Load from shared database
-    const sharedDb = getSharedDatabase();
-    setGroups(sharedDb.groups || {});
-    setExpenses(sharedDb.expenses || []);
-    setTransactions(sharedDb.transactions || []);
-    
-    if (savedGroup) {
-      const group = JSON.parse(savedGroup);
-      // Check if group exists in shared database and update with latest data
-      if (sharedDb.groups[group.code]) {
-        const latestGroup = sharedDb.groups[group.code];
-        setCurrentGroup(latestGroup);
-        localStorage.setItem('splitpay_group', JSON.stringify(latestGroup));
-      } else {
-        setCurrentGroup(group);
-      }
-    }
+    setIsLoading(false);
   }, []);
 
-  // Listen for storage changes from other tabs/windows
+  // Subscribe to current group changes
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === SHARED_DB_KEY && e.newValue) {
-        const sharedDb = JSON.parse(e.newValue);
-        setGroups(sharedDb.groups || {});
-        setExpenses(sharedDb.expenses || []);
-        setTransactions(sharedDb.transactions || []);
+    if (!currentGroup) return;
+
+    // Unsubscribe from previous listeners
+    unsubscribers.forEach(unsub => unsub());
+
+    const groupRef = doc(db, 'groups', currentGroup.code);
+    const unsubGroup = onSnapshot(groupRef, (doc) => {
+      if (doc.exists()) {
+        const groupData = doc.data() as Group;
+        setCurrentGroup(groupData);
+        localStorage.setItem('splitpay_group', JSON.stringify(groupData));
         
-        // Update current group if it exists in the shared db
-        if (currentGroup && sharedDb.groups[currentGroup.code]) {
-          const updatedGroup = sharedDb.groups[currentGroup.code];
-          setCurrentGroup(updatedGroup);
-          localStorage.setItem('splitpay_group', JSON.stringify(updatedGroup));
+        // Check for new members
+        if (groupData.members.length > currentGroup.members.length) {
+          const newMembers = groupData.members.slice(currentGroup.members.length);
+          toast({
+            title: "Nuovo membro! 🎉",
+            description: `${newMembers.map(m => m.name).join(', ')} si ${newMembers.length === 1 ? 'è unito' : 'sono uniti'} al gruppo`,
+          });
         }
       }
+    });
+
+    // Subscribe to expenses
+    const expensesQuery = query(
+      collection(db, 'expenses'),
+      where('groupId', '==', currentGroup.id),
+      orderBy('createdAt', 'desc')
+    );
+    
+    const unsubExpenses = onSnapshot(expensesQuery, (snapshot) => {
+      const expensesData: Expense[] = [];
+      snapshot.forEach((doc) => {
+        expensesData.push({ id: doc.id, ...doc.data() } as Expense);
+      });
+      setExpenses(expensesData);
+    });
+
+    // Subscribe to transactions
+    const transactionsQuery = query(
+      collection(db, 'transactions'),
+      where('groupId', '==', currentGroup.id),
+      orderBy('date', 'desc')
+    );
+    
+    const unsubTransactions = onSnapshot(transactionsQuery, (snapshot) => {
+      const transactionsData: Transaction[] = [];
+      snapshot.forEach((doc) => {
+        transactionsData.push({ id: doc.id, ...doc.data() } as Transaction);
+      });
+      setTransactions(transactionsData);
+    });
+
+    setUnsubscribers([unsubGroup, unsubExpenses, unsubTransactions]);
+
+    return () => {
+      unsubGroup();
+      unsubExpenses();
+      unsubTransactions();
     };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
   }, [currentGroup?.code]);
-
-  // Save data to localStorage when state changes
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('splitpay_user', JSON.stringify(currentUser));
-    }
-  }, [currentUser]);
-
-  useEffect(() => {
-    if (currentGroup) {
-      localStorage.setItem('splitpay_group', JSON.stringify(currentGroup));
-    }
-  }, [currentGroup]);
-
-  useEffect(() => {
-    const sharedDb = getSharedDatabase();
-    updateSharedDatabase({ 
-      groups, 
-      expenses: sharedDb.expenses || [],
-      transactions: sharedDb.transactions || []
-    });
-  }, [groups]);
-
-  useEffect(() => {
-    const sharedDb = getSharedDatabase();
-    updateSharedDatabase({ 
-      groups: sharedDb.groups || {}, 
-      expenses,
-      transactions: sharedDb.transactions || []
-    });
-  }, [expenses]);
-
-  useEffect(() => {
-    const sharedDb = getSharedDatabase();
-    updateSharedDatabase({ 
-      groups: sharedDb.groups || {}, 
-      expenses: sharedDb.expenses || [],
-      transactions
-    });
-  }, [transactions]);
 
   const login = (name: string) => {
     const user: User = {
@@ -166,6 +136,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`
     };
     setCurrentUser(user);
+    localStorage.setItem('splitpay_user', JSON.stringify(user));
+    
+    // Check if there's a saved group
+    const savedGroup = localStorage.getItem('splitpay_group');
+    if (savedGroup) {
+      const group = JSON.parse(savedGroup);
+      joinGroup(group.code);
+    }
     
     toast({
       title: `Benvenuto, ${name}! 👋`,
@@ -174,8 +152,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
+    unsubscribers.forEach(unsub => unsub());
     setCurrentUser(null);
     setCurrentGroup(null);
+    setExpenses([]);
+    setTransactions([]);
     localStorage.removeItem('splitpay_user');
     localStorage.removeItem('splitpay_group');
     
@@ -185,115 +166,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const createGroup = (name: string): string => {
+  const createGroup = async (name: string): Promise<string> => {
+    if (!currentUser) throw new Error('User not logged in');
+    
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
     const group: Group = {
       id: `group_${Date.now()}`,
       name,
       code,
-      members: currentUser ? [currentUser] : [],
+      members: [currentUser],
       createdAt: new Date()
     };
     
-    setCurrentGroup(group);
-    const newGroups = { ...groups, [code]: group };
-    setGroups(newGroups);
-    
-    toast({
-      title: `Gruppo "${name}" creato! 🎉`,
-      description: `Codice gruppo: ${code}`,
-    });
-    
-    return code;
+    try {
+      // Save to Firestore
+      await setDoc(doc(db, 'groups', code), group);
+      
+      setCurrentGroup(group);
+      localStorage.setItem('splitpay_group', JSON.stringify(group));
+      
+      toast({
+        title: `Gruppo "${name}" creato! 🎉`,
+        description: `Codice gruppo: ${code}`,
+      });
+      
+      return code;
+    } catch (error) {
+      toast({
+        title: "Errore",
+        description: "Impossibile creare il gruppo",
+        variant: "destructive"
+      });
+      throw error;
+    }
   };
 
-  const joinGroup = (code: string): boolean => {
-    if (code.length === 6 && currentUser) {
-      const upperCode = code.toUpperCase();
+  const joinGroup = async (code: string): Promise<boolean> => {
+    if (!currentUser) return false;
+    
+    if (code.length !== 6) {
+      toast({
+        title: "Codice non valido",
+        description: "Il codice deve essere di 6 caratteri",
+        variant: "destructive"
+      });
+      return false;
+    }
+
+    const upperCode = code.toUpperCase();
+    
+    try {
+      const groupRef = doc(db, 'groups', upperCode);
+      const groupDoc = await getDoc(groupRef);
       
-      // First check shared database for the latest group data
-      const sharedDb = getSharedDatabase();
-      const existingGroup = sharedDb.groups[upperCode] || groups[upperCode];
-      
-      if (existingGroup) {
-        // Check if user is already a member by both ID and name
-        const isAlreadyMember = existingGroup.members.some(
+      if (groupDoc.exists()) {
+        const groupData = groupDoc.data() as Group;
+        
+        // Check if user is already a member
+        const isAlreadyMember = groupData.members.some(
           m => m.id === currentUser.id || m.name === currentUser.name
         );
         
-        // Add current user to existing group if not already a member
-        const updatedMembers = isAlreadyMember 
-          ? existingGroup.members 
-          : [...existingGroup.members, currentUser];
-          
-        const updatedGroup = { ...existingGroup, members: updatedMembers };
-        
-        setCurrentGroup(updatedGroup);
-        const newGroups = { ...groups, [upperCode]: updatedGroup };
-        setGroups(newGroups);
-        
         if (!isAlreadyMember) {
+          // Add user to group
+          await updateDoc(groupRef, {
+            members: arrayUnion(currentUser)
+          });
+          
           toast({
-            title: `Entrato nel gruppo "${existingGroup.name}"! ✅`,
-            description: `Ora siete in ${updatedMembers.length}`,
+            title: `Entrato nel gruppo "${groupData.name}"! ✅`,
+            description: `Benvenuto nel gruppo!`,
           });
         } else {
+          setCurrentGroup(groupData);
+          localStorage.setItem('splitpay_group', JSON.stringify(groupData));
+          
           toast({
-            title: `Bentornato nel gruppo "${existingGroup.name}"!`,
-            description: `${updatedMembers.length} membri nel gruppo`,
+            title: `Bentornato nel gruppo "${groupData.name}"!`,
+            description: `${groupData.members.length} membri nel gruppo`,
           });
         }
         
         return true;
       } else {
-        // Create new group if code doesn't exist
-        const group: Group = {
-          id: `group_${Date.now()}`,
-          name: `Gruppo ${code}`,
-          code: upperCode,
-          members: [currentUser],
-          createdAt: new Date()
-        };
-        
-        setCurrentGroup(group);
-        const newGroups = { ...groups, [upperCode]: group };
-        setGroups(newGroups);
-        
         toast({
-          title: `Nuovo gruppo creato! ✅`,
-          description: "Condividi il codice con i tuoi amici",
+          title: "Gruppo non trovato",
+          description: "Controlla il codice e riprova",
+          variant: "destructive"
         });
-        
-        return true;
+        return false;
       }
-    }
-    
-    toast({
-      title: "Codice non valido",
-      description: "Il codice deve essere di 6 caratteri",
-      variant: "destructive"
-    });
-    
-    return false;
-  };
-
-  const syncCurrentGroup = () => {
-    if (!currentGroup) return;
-    
-    const sharedDb = getSharedDatabase();
-    if (sharedDb.groups[currentGroup.code]) {
-      const latestGroup = sharedDb.groups[currentGroup.code];
-      setCurrentGroup(latestGroup);
-      localStorage.setItem('splitpay_group', JSON.stringify(latestGroup));
+    } catch (error) {
+      toast({
+        title: "Errore",
+        description: "Impossibile unirsi al gruppo",
+        variant: "destructive"
+      });
+      return false;
     }
   };
 
-  const updateCurrentGroup = (group: Group) => {
-    setCurrentGroup(group);
-    localStorage.setItem('splitpay_group', JSON.stringify(group));
-  };
-
-  const addExpense = (amount: number, description: string) => {
+  const addExpense = async (amount: number, description: string) => {
     if (!currentUser || !currentGroup) {
       toast({
         title: "Errore",
@@ -303,63 +276,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const expense: Expense = {
-      id: `expense_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      groupId: currentGroup.id,
-      amount,
-      description,
-      paidBy: currentUser.id,
-      participants: currentGroup.members.map(m => m.id),
-      createdAt: new Date(),
-      createdBy: currentUser.id
-    };
+    try {
+      const expense = {
+        groupId: currentGroup.id,
+        amount,
+        description,
+        paidBy: currentUser.id,
+        paidByName: currentUser.name,
+        participants: currentGroup.members.map(m => m.id),
+        createdAt: serverTimestamp(),
+        createdBy: currentUser.id,
+        createdByName: currentUser.name
+      };
 
-    const newExpenses = [...expenses, expense];
-    setExpenses(newExpenses);
+      await addDoc(collection(db, 'expenses'), expense);
 
-    const transaction: Transaction = {
-      id: `transaction_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      type: 'expense',
-      amount,
-      description: `${currentUser.name} ha pagato: ${description}`,
-      date: new Date(),
-      from: currentUser.id,
-      status: 'completed'
-    };
+      const transaction = {
+        groupId: currentGroup.id,
+        type: 'expense',
+        amount,
+        description: `${currentUser.name} ha pagato: ${description}`,
+        date: serverTimestamp(),
+        from: currentUser.id,
+        fromName: currentUser.name,
+        status: 'completed'
+      };
 
-    const newTransactions = [...transactions, transaction];
-    setTransactions(newTransactions);
+      await addDoc(collection(db, 'transactions'), transaction);
 
-    toast({
-      title: `Spesa aggiunta: €${amount.toFixed(2)}`,
-      description: description || "Spesa generica",
-    });
+      toast({
+        title: `Spesa aggiunta: €${amount.toFixed(2)}`,
+        description: description || "Spesa generica",
+      });
+    } catch (error) {
+      toast({
+        title: "Errore",
+        description: "Impossibile aggiungere la spesa",
+        variant: "destructive"
+      });
+    }
   };
 
-  const payExpense = (expenseId: string) => {
-    if (!currentUser) return;
+  const payExpense = async (expenseId: string) => {
+    if (!currentUser || !currentGroup) return;
 
     const expense = expenses.find(e => e.id === expenseId);
     if (!expense) return;
 
-    const transaction: Transaction = {
-      id: `transaction_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      type: 'payment',
-      amount: expense.amount / expense.participants.length,
-      description: `Pagamento quota per: ${expense.description}`,
-      date: new Date(),
-      from: currentUser.id,
-      to: expense.paidBy,
-      status: 'completed'
-    };
+    try {
+      const transaction = {
+        groupId: currentGroup.id,
+        type: 'payment',
+        amount: expense.amount / expense.participants.length,
+        description: `Pagamento quota per: ${expense.description}`,
+        date: serverTimestamp(),
+        from: currentUser.id,
+        fromName: currentUser.name,
+        to: expense.paidBy,
+        toName: expense.paidByName || 'Unknown',
+        status: 'completed'
+      };
 
-    const newTransactions = [...transactions, transaction];
-    setTransactions(newTransactions);
+      await addDoc(collection(db, 'transactions'), transaction);
 
-    toast({
-      title: "Pagamento registrato! 💳",
-      description: `€${transaction.amount.toFixed(2)} pagato`,
-    });
+      toast({
+        title: "Pagamento registrato! 💳",
+        description: `€${transaction.amount.toFixed(2)} pagato`,
+      });
+    } catch (error) {
+      toast({
+        title: "Errore",
+        description: "Impossibile registrare il pagamento",
+        variant: "destructive"
+      });
+    }
   };
 
   const calculateBalances = (): { [userId: string]: number } => {
@@ -373,25 +363,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // Calculate balances based on expenses
-    expenses
-      .filter(expense => expense.groupId === currentGroup.id)
-      .forEach(expense => {
-        if (expense.paidBy && expense.participants.length > 0) {
-          const sharePerPerson = expense.amount / expense.participants.length;
-          
-          // Person who paid gets credit
-          if (balances[expense.paidBy] !== undefined) {
-            balances[expense.paidBy] += expense.amount;
-          }
-          
-          // All participants get debited their share
-          expense.participants.forEach(participantId => {
-            if (balances[participantId] !== undefined) {
-              balances[participantId] -= sharePerPerson;
-            }
-          });
+    expenses.forEach(expense => {
+      if (expense.paidBy && expense.participants.length > 0) {
+        const sharePerPerson = expense.amount / expense.participants.length;
+        
+        // Person who paid gets credit
+        if (balances[expense.paidBy] !== undefined) {
+          balances[expense.paidBy] += expense.amount;
         }
-      });
+        
+        // All participants get debited their share
+        expense.participants.forEach(participantId => {
+          if (balances[participantId] !== undefined) {
+            balances[participantId] -= sharePerPerson;
+          }
+        });
+      }
+    });
 
     // Apply payments
     transactions
@@ -416,24 +404,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const balances = calculateBalances();
     const settlements: { from: User; to: User; amount: number }[] = [];
     
-    // Create arrays of debtors and creditors
     const debtors: { user: User; amount: number }[] = [];
     const creditors: { user: User; amount: number }[] = [];
     
     currentGroup.members.forEach(member => {
       const balance = balances[member.id] || 0;
-      if (balance < -0.01) { // owes money
+      if (balance < -0.01) {
         debtors.push({ user: member, amount: Math.abs(balance) });
-      } else if (balance > 0.01) { // is owed money
+      } else if (balance > 0.01) {
         creditors.push({ user: member, amount: balance });
       }
     });
     
-    // Sort by amount
     debtors.sort((a, b) => b.amount - a.amount);
     creditors.sort((a, b) => b.amount - a.amount);
     
-    // Calculate optimal settlements
     let i = 0, j = 0;
     while (i < debtors.length && j < creditors.length) {
       const debtor = debtors[i];
@@ -474,8 +459,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       payExpense,
       calculateBalances,
       getSettlements,
-      syncCurrentGroup,
-      updateCurrentGroup
+      isLoading
     }}>
       {children}
     </AppContext.Provider>
