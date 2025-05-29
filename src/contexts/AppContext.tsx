@@ -1,6 +1,5 @@
-
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, Group, Expense, Transaction } from '@/types';
+import { User, Group, Expense, Transaction, Settlement } from '@/types';
 import { toast } from '@/hooks/use-toast';
 
 interface AppContextType {
@@ -8,13 +7,18 @@ interface AppContextType {
   currentGroup: Group | null;
   expenses: Expense[];
   transactions: Transaction[];
+  settlements: Settlement[];
   login: (name: string) => void;
   logout: () => void;
   createGroup: (name: string) => string;
   joinGroup: (code: string) => boolean;
-  addExpense: (amount: number, description: string) => void;
+  addExpense: (amount: number, description: string, paidBy?: string, participants?: string[]) => void;
   payExpense: (expenseId: string, payerId: string) => void;
   calculateBalances: () => { [userId: string]: number };
+  getGroupExpenses: () => Expense[];
+  settleDebt: (fromUserId: string, toUserId: string, amount: number) => void;
+  addMemberToGroup: (memberName: string) => void;
+  removeMemberFromGroup: (memberId: string) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -32,6 +36,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentGroup, setCurrentGroup] = useState<Group | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
 
   // Load data from localStorage on mount
   useEffect(() => {
@@ -39,6 +44,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const savedGroup = localStorage.getItem('splitpay_group');
     const savedExpenses = localStorage.getItem('splitpay_expenses');
     const savedTransactions = localStorage.getItem('splitpay_transactions');
+    const savedSettlements = localStorage.getItem('splitpay_settlements');
 
     if (savedUser) {
       setCurrentUser(JSON.parse(savedUser));
@@ -51,6 +57,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     if (savedTransactions) {
       setTransactions(JSON.parse(savedTransactions));
+    }
+    if (savedSettlements) {
+      setSettlements(JSON.parse(savedSettlements));
     }
   }, []);
 
@@ -75,6 +84,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('splitpay_transactions', JSON.stringify(transactions));
   }, [transactions]);
 
+  useEffect(() => {
+    localStorage.setItem('splitpay_settlements', JSON.stringify(settlements));
+  }, [settlements]);
+
   const login = (name: string) => {
     const user: User = {
       id: `user_${Date.now()}`,
@@ -95,10 +108,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentGroup(null);
     setExpenses([]);
     setTransactions([]);
+    setSettlements([]);
     localStorage.removeItem('splitpay_user');
     localStorage.removeItem('splitpay_group');
     localStorage.removeItem('splitpay_expenses');
     localStorage.removeItem('splitpay_transactions');
+    localStorage.removeItem('splitpay_settlements');
     
     toast({
       title: "Logout effettuato",
@@ -130,11 +145,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // In a real app, this would fetch the group from a backend
     // For demo purposes, we'll create a mock group
     if (code.length === 6 && currentUser) {
+      const mockMembers = [
+        currentUser,
+        {
+          id: `user_${Date.now() + 1}`,
+          name: 'Marco',
+          balance: 0,
+          avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=Marco`
+        },
+        {
+          id: `user_${Date.now() + 2}`,
+          name: 'Laura',
+          balance: 0,
+          avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=Laura`
+        }
+      ];
+
       const group: Group = {
         id: `group_${Date.now()}`,
         name: `Gruppo ${code}`,
         code,
-        members: [currentUser],
+        members: mockMembers,
         createdAt: new Date()
       };
       
@@ -157,16 +188,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   };
 
-  const addExpense = (amount: number, description: string) => {
+  const addMemberToGroup = (memberName: string) => {
+    if (!currentGroup) return;
+
+    const newMember: User = {
+      id: `user_${Date.now()}`,
+      name: memberName,
+      balance: 0,
+      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${memberName}`
+    };
+
+    const updatedGroup = {
+      ...currentGroup,
+      members: [...currentGroup.members, newMember]
+    };
+
+    setCurrentGroup(updatedGroup);
+
+    toast({
+      title: `${memberName} aggiunto al gruppo! 👥`,
+      description: "Nuovo membro aggiunto con successo",
+    });
+  };
+
+  const removeMemberFromGroup = (memberId: string) => {
+    if (!currentGroup) return;
+
+    const updatedGroup = {
+      ...currentGroup,
+      members: currentGroup.members.filter(m => m.id !== memberId)
+    };
+
+    setCurrentGroup(updatedGroup);
+
+    toast({
+      title: "Membro rimosso",
+      description: "Il membro è stato rimosso dal gruppo",
+    });
+  };
+
+  const addExpense = (amount: number, description: string, paidBy?: string, participants?: string[]) => {
     if (!currentUser || !currentGroup) return;
+
+    const payerId = paidBy || currentUser.id;
+    const participantIds = participants || currentGroup.members.map(m => m.id);
 
     const expense: Expense = {
       id: `expense_${Date.now()}`,
       groupId: currentGroup.id,
       amount,
       description,
-      paidBy: '',
-      participants: [currentUser.id],
+      paidBy: payerId,
+      participants: participantIds,
       createdAt: new Date(),
       createdBy: currentUser.id
     };
@@ -179,14 +252,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amount,
       description,
       date: new Date(),
-      status: 'pending'
+      from: payerId,
+      status: 'completed'
     };
 
     setTransactions(prev => [...prev, transaction]);
 
+    const payer = currentGroup.members.find(m => m.id === payerId);
     toast({
-      title: `Spesa aggiunta: €${amount}`,
-      description: description || "Spesa generica",
+      title: `Spesa aggiunta: €${amount.toFixed(2)}`,
+      description: `Pagata da ${payer?.name || 'Unknown'} - ${description}`,
     });
   };
 
@@ -220,6 +295,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const settleDebt = (fromUserId: string, toUserId: string, amount: number) => {
+    if (!currentGroup) return;
+
+    const settlement: Settlement = {
+      id: `settlement_${Date.now()}`,
+      groupId: currentGroup.id,
+      from: fromUserId,
+      to: toUserId,
+      amount,
+      createdAt: new Date()
+    };
+
+    setSettlements(prev => [...prev, settlement]);
+
+    const transaction: Transaction = {
+      id: `transaction_${Date.now()}`,
+      type: 'settlement',
+      amount,
+      description: `Saldo debito`,
+      date: new Date(),
+      from: fromUserId,
+      to: toUserId,
+      status: 'completed'
+    };
+
+    setTransactions(prev => [...prev, transaction]);
+
+    const fromUser = currentGroup.members.find(m => m.id === fromUserId);
+    const toUser = currentGroup.members.find(m => m.id === toUserId);
+
+    toast({
+      title: "Debito saldato! 💰",
+      description: `${fromUser?.name} ha pagato €${amount.toFixed(2)} a ${toUser?.name}`,
+    });
+  };
+
   const calculateBalances = (): { [userId: string]: number } => {
     const balances: { [userId: string]: number } = {};
     
@@ -232,7 +343,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Calculate balances based on expenses
     expenses.forEach(expense => {
-      if (expense.paidBy && expense.participants.length > 0) {
+      if (expense.groupId === currentGroup.id && expense.paidBy && expense.participants.length > 0) {
         const sharePerPerson = expense.amount / expense.participants.length;
         
         // Person who paid gets credit
@@ -245,7 +356,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
+    // Apply settlements
+    settlements.forEach(settlement => {
+      if (settlement.groupId === currentGroup.id) {
+        balances[settlement.from] += settlement.amount;
+        balances[settlement.to] -= settlement.amount;
+      }
+    });
+
     return balances;
+  };
+
+  const getGroupExpenses = (): Expense[] => {
+    if (!currentGroup) return [];
+    return expenses.filter(expense => expense.groupId === currentGroup.id);
   };
 
   return (
@@ -254,13 +378,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currentGroup,
       expenses,
       transactions,
+      settlements,
       login,
       logout,
       createGroup,
       joinGroup,
       addExpense,
       payExpense,
-      calculateBalances
+      calculateBalances,
+      getGroupExpenses,
+      settleDebt,
+      addMemberToGroup,
+      removeMemberFromGroup
     }}>
       {children}
     </AppContext.Provider>
